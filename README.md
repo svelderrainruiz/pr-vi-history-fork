@@ -5,8 +5,8 @@ Reusable GitHub workflow that treats pull requests as the VI history analysis su
 ## What this repository provides
 
 - `.github/workflows/pr-vi-history.yml` (reusable workflow)
-- Pass-through orchestration to the maintained toolchain in
-  `svelderrainruiz/compare-vi-cli-action`.
+- Local `tools/*` scripts required to generate manifest, run history compare,
+  and render PR summaries.
 
 ## Downstream usage
 
@@ -35,13 +35,10 @@ jobs:
       include_merge_parents: false
       upload_artifact: true
       post_comment: true
-      toolchain_ref: develop
     secrets: inherit
 ```
 
 ## Notes
 
-- This repository is intentionally thin and delegates execution to
-  `compare-vi-cli-action` scripts (`toolchain_ref`) to avoid duplicated LabVIEW
-  history logic.
+- The workflow is self-contained and executes from this repository only.
 - Once a stable tag is published, prefer pinning consumers to `@v1`.

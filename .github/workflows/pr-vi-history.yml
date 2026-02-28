@@ -47,11 +47,6 @@ on:
         required: false
         default: ''
         type: string
-      toolchain_ref:
-        description: 'compare-vi-cli-action ref to source scripts from'
-        required: false
-        default: 'develop'
-        type: string
   workflow_call:
     inputs:
       pr_number:
@@ -97,11 +92,6 @@ on:
         description: 'Optional note appended to PR comment output'
         required: false
         default: ''
-        type: string
-      toolchain_ref:
-        description: 'compare-vi-cli-action ref to source scripts from'
-        required: false
-        default: 'develop'
         type: string
     outputs:
       summary_path:
@@ -162,7 +152,6 @@ jobs:
       INCLUDE_MERGE_PARENTS: ${{ inputs.include_merge_parents }}
       RESULTS_ROOT_INPUT: ${{ inputs.results_root }}
       NOTE: ${{ inputs.note }}
-      TOOLCHAIN_REF: ${{ inputs.toolchain_ref }}
     steps:
       - name: Compute artifact metadata
         id: meta
@@ -227,28 +216,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout compare toolchain
-        uses: actions/checkout@v5
-        with:
-          repository: svelderrainruiz/compare-vi-cli-action
-          ref: ${{ env.TOOLCHAIN_REF || 'develop' }}
-          path: .tools/compare-vi-cli-action
-          fetch-depth: 1
-
-      - name: Resolve toolchain root
-        id: tools
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-
-          $toolsRoot = Join-Path $env:GITHUB_WORKSPACE '.tools/compare-vi-cli-action'
-          if (-not (Test-Path -LiteralPath $toolsRoot -PathType Container)) {
-            throw ("Toolchain checkout missing at: {0}" -f $toolsRoot)
-          }
-          $toolsRoot = (Resolve-Path -LiteralPath $toolsRoot).Path
-          "tools_root=$toolsRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
       - name: Checkout pull request head
         shell: pwsh
         run: |
@@ -277,13 +244,12 @@ jobs:
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           MANIFEST_PATH: ${{ steps.paths.outputs.manifest_path }}
-          TOOLS_ROOT: ${{ steps.tools.outputs.tools_root }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
 
-          pwsh -NoLogo -NoProfile -File (Join-Path $env:TOOLS_ROOT 'tools' 'Get-PRVIDiffManifest.ps1') `
+          pwsh -NoLogo -NoProfile -File (Join-Path $env:GITHUB_WORKSPACE 'tools' 'Get-PRVIDiffManifest.ps1') `
             -BaseRef $env:BASE_SHA `
             -HeadRef $env:HEAD_SHA `
             -OutputPath $env:MANIFEST_PATH
@@ -315,7 +281,6 @@ jobs:
           MANIFEST_PATH: ${{ steps.manifest.outputs.manifest_path }}
           RESULTS_ROOT: ${{ steps.paths.outputs.results_root }}
           SUMMARY_PATH: ${{ steps.paths.outputs.summary_path }}
-          TOOLS_ROOT: ${{ steps.tools.outputs.tools_root }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -324,7 +289,7 @@ jobs:
           $args = @(
             '-NoLogo',
             '-NoProfile',
-            '-File', (Join-Path $env:TOOLS_ROOT 'tools' 'Invoke-PRVIHistory.ps1'),
+            '-File', (Join-Path $env:GITHUB_WORKSPACE 'tools' 'Invoke-PRVIHistory.ps1'),
             '-ManifestPath', $env:MANIFEST_PATH,
             '-ResultsRoot', $env:RESULTS_ROOT,
             '-SummaryPath', $env:SUMMARY_PATH
@@ -362,7 +327,6 @@ jobs:
         env:
           SUMMARY_PATH: ${{ steps.history.outputs.summary_path }}
           RESULTS_ROOT: ${{ steps.paths.outputs.results_root }}
-          TOOLS_ROOT: ${{ steps.tools.outputs.tools_root }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -375,7 +339,7 @@ jobs:
           $markdownPath = Join-Path $env:RESULTS_ROOT 'vi-history-summary.md'
           $expandedPath = Join-Path $env:RESULTS_ROOT 'vi-history-summary-expanded.json'
 
-          pwsh -NoLogo -NoProfile -File (Join-Path $env:TOOLS_ROOT 'tools' 'Summarize-PRVIHistory.ps1') `
+          pwsh -NoLogo -NoProfile -File (Join-Path $env:GITHUB_WORKSPACE 'tools' 'Summarize-PRVIHistory.ps1') `
             -SummaryPath $env:SUMMARY_PATH `
             -MarkdownPath $markdownPath `
             -OutputJsonPath $expandedPath
