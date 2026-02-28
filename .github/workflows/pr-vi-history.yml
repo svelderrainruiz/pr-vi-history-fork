@@ -17,6 +17,11 @@ on:
         required: false
         default: '6'
         type: string
+      max_targets:
+        description: 'Maximum changed VI targets processed per run (0 = all)'
+        required: false
+        default: '60'
+        type: string
       compare_modes:
         description: 'Optional comma/semicolon/newline separated mode list'
         required: false
@@ -87,6 +92,11 @@ on:
         description: 'Maximum commit pairs per VI (0 = all)'
         required: false
         default: '6'
+        type: string
+      max_targets:
+        description: 'Maximum changed VI targets processed per run (0 = all)'
+        required: false
+        default: '60'
         type: string
       compare_modes:
         description: 'Optional comma/semicolon/newline separated mode list'
@@ -194,12 +204,14 @@ jobs:
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
       FETCH_DEPTH: ${{ inputs.fetch_depth }}
+      MAX_TARGETS: ${{ inputs.max_targets }}
     outputs:
       pr_number: ${{ steps.pr.outputs.pr_number }}
       pr_url: ${{ steps.pr.outputs.pr_url }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
       pair_count: ${{ steps.manifest.outputs.pair_count }}
+      pair_total_count: ${{ steps.manifest.outputs.pair_total_count }}
       manifest_artifact_name: ${{ steps.meta.outputs.manifest_artifact_name }}
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
     steps:
@@ -281,15 +293,45 @@ jobs:
             throw ("Manifest generation failed: {0}" -f $manifestPath)
           }
           $pairs = 0
+          $totalPairs = 0
+          $maxTargets = 0
+          $maxTargetsConfigured = $false
+          if (-not [string]::IsNullOrWhiteSpace($env:MAX_TARGETS)) {
+            $parsedMaxTargets = 0
+            if (-not [int]::TryParse($env:MAX_TARGETS, [ref]$parsedMaxTargets) -or $parsedMaxTargets -lt 0) {
+              throw ("Invalid max_targets value '{0}'. Expected a non-negative integer." -f $env:MAX_TARGETS)
+            }
+            if ($parsedMaxTargets -gt 0) {
+              $maxTargets = $parsedMaxTargets
+              $maxTargetsConfigured = $true
+            }
+          }
           $content = Get-Content -LiteralPath $manifestPath -Raw
           if (-not [string]::IsNullOrWhiteSpace($content)) {
             $json = $content | ConvertFrom-Json
             if ($json -and $json.pairs -is [System.Collections.IEnumerable]) {
-              $pairs = @($json.pairs).Count
+              $pairList = @($json.pairs)
+              $totalPairs = $pairList.Count
+              if ($maxTargetsConfigured -and $totalPairs -gt $maxTargets) {
+                $pairList = @($pairList | Select-Object -First $maxTargets)
+                $json.pairs = $pairList
+                $json | Add-Member -NotePropertyName totalPairs -NotePropertyValue $totalPairs -Force
+                $json | Add-Member -NotePropertyName maxTargets -NotePropertyValue $maxTargets -Force
+                $json | Add-Member -NotePropertyName truncated -NotePropertyValue $true -Force
+                $json | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+                if ($env:GITHUB_STEP_SUMMARY) {
+                  Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Manifest truncated to first **{0}** changed VIs out of **{1}** total (`max_targets={0}`)." -f $maxTargets, $totalPairs)
+                }
+              }
+              $pairs = $pairList.Count
             }
+          }
+          if ($totalPairs -le 0) {
+            $totalPairs = $pairs
           }
           "manifest_path=$manifestPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "pair_count=$pairs" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "pair_total_count=$totalPairs" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Upload prepare artifact
         uses: actions/upload-artifact@v5
@@ -733,6 +775,7 @@ jobs:
       WINDOWS_MARKDOWN_ENCODED: ${{ needs.history_windows_container.outputs.markdown }}
       WINDOWS_ARTIFACT_NAME: ${{ needs.history_windows_container.outputs.artifact_name }}
       PREPARE_PAIR_COUNT: ${{ needs.prepare.outputs.pair_count }}
+      PREPARE_PAIR_TOTAL_COUNT: ${{ needs.prepare.outputs.pair_total_count }}
       PREPARE_ARTIFACT_NAME: ${{ needs.prepare.outputs.artifact_name }}
       LINUX_JOB_RESULT: ${{ needs.history_linux_smoke.result }}
       LINUX_LANE_STATUS_RAW: ${{ needs.history_linux_smoke.outputs.lane_status }}
@@ -751,6 +794,8 @@ jobs:
       artifact_name: ${{ steps.collect.outputs.artifact_name }}
       windows_lane_status: ${{ steps.collect.outputs.windows_lane_status }}
       linux_lane_status: ${{ steps.collect.outputs.linux_lane_status }}
+      pair_total_count: ${{ steps.collect.outputs.pair_total_count }}
+      pair_truncated: ${{ steps.collect.outputs.pair_truncated }}
     steps:
       - name: Collect outputs and validate contract
         id: collect
@@ -773,6 +818,14 @@ jobs:
           if (-not [int]::TryParse($env:WINDOWS_PAIR_COUNT, [ref]$pairCount)) {
             [void][int]::TryParse(($env:PREPARE_PAIR_COUNT ?? '0'), [ref]$pairCount)
           }
+          $pairTotalCount = $pairCount
+          if (-not [int]::TryParse(($env:PREPARE_PAIR_TOTAL_COUNT ?? $pairCount), [ref]$pairTotalCount)) {
+            $pairTotalCount = $pairCount
+          }
+          if ($pairTotalCount -lt $pairCount) {
+            $pairTotalCount = $pairCount
+          }
+          $pairTruncated = $pairTotalCount -gt $pairCount
           $targetCount = 0
           [void][int]::TryParse(($env:WINDOWS_TARGET_COUNT ?? '0'), [ref]$targetCount)
           $completedCount = 0
@@ -817,6 +870,8 @@ jobs:
           "results_root=$resultsRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "manifest_path=$manifestPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "pair_count=$pairCount" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "pair_total_count=$pairTotalCount" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "pair_truncated=$($pairTruncated.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "target_count=$targetCount" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "completed_count=$completedCount" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "diff_count=$diffCount" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
@@ -830,6 +885,9 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Windows lane status: **{0}**" -f $windowsLaneStatus)
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Linux lane status: **{0}**" -f $linuxLaneStatus)
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Pair count: **{0}**" -f $pairCount)
+          if ($pairTruncated) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Pair scope: truncated to **{0}** of **{1}** changed VIs via `max_targets`." -f $pairCount, $pairTotalCount)
+          }
           if (-not [string]::IsNullOrWhiteSpace($env:LINUX_SMOKE_SUMMARY_PATH)) {
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ('- Linux smoke summary: `{0}`' -f $env:LINUX_SMOKE_SUMMARY_PATH)
           }
@@ -863,6 +921,8 @@ jobs:
           WINDOWS_LANE_STATUS: ${{ steps.collect.outputs.windows_lane_status }}
           LINUX_LANE_STATUS: ${{ steps.collect.outputs.linux_lane_status }}
           PAIR_COUNT: ${{ steps.collect.outputs.pair_count }}
+          PAIR_TOTAL_COUNT: ${{ steps.collect.outputs.pair_total_count }}
+          PAIR_TRUNCATED: ${{ steps.collect.outputs.pair_truncated }}
           MARKDOWN_ENCODED: ${{ env.WINDOWS_MARKDOWN_ENCODED }}
         shell: pwsh
         run: |
@@ -871,6 +931,9 @@ jobs:
 
           $pairCount = 0
           [void][int]::TryParse(($env:PAIR_COUNT ?? '0'), [ref]$pairCount)
+          $pairTotalCount = $pairCount
+          [void][int]::TryParse(($env:PAIR_TOTAL_COUNT ?? $pairCount), [ref]$pairTotalCount)
+          $pairTruncated = [string]::Equals($env:PAIR_TRUNCATED, 'true', [System.StringComparison]::OrdinalIgnoreCase)
 
           $bodyLines = [System.Collections.Generic.List[string]]::new()
           $bodyLines.Add('### VI history compare') | Out-Null
@@ -888,10 +951,16 @@ jobs:
             $bodyLines.Add('No changed `.vi` entries were detected for this pull request.') | Out-Null
           } elseif ($markdown) {
             $bodyLines.Add(('- Changed VI pairs: **{0}**' -f $pairCount)) | Out-Null
+            if ($pairTruncated -and $pairTotalCount -gt $pairCount) {
+              $bodyLines.Add(('- Scope: first **{0}** of **{1}** changed VIs (`max_targets` cap).' -f $pairCount, $pairTotalCount)) | Out-Null
+            }
             $bodyLines.Add('') | Out-Null
             $bodyLines.Add($markdown) | Out-Null
           } else {
             $bodyLines.Add(('- Changed VI pairs: **{0}** (summary unavailable)' -f $pairCount)) | Out-Null
+            if ($pairTruncated -and $pairTotalCount -gt $pairCount) {
+              $bodyLines.Add(('- Scope: first **{0}** of **{1}** changed VIs (`max_targets` cap).' -f $pairCount, $pairTotalCount)) | Out-Null
+            }
             if ($env:WINDOWS_SUMMARY_PATH) {
               $bodyLines.Add(('- Summary JSON: `{0}`' -f $env:WINDOWS_SUMMARY_PATH)) | Out-Null
             }
