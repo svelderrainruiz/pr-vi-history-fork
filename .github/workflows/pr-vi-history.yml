@@ -253,8 +253,8 @@ jobs:
       - name: Checkout workflow toolchain
         uses: actions/checkout@v5
         with:
-          repository: LabVIEW-Community-CI-CD/pr-vi-history
-          ref: v1
+          repository: svelderrainruiz/pr-vi-history-fork
+          ref: ${{ github.workflow_sha }}
           path: .pr-vi-history-tools
           fetch-depth: 1
 
@@ -375,8 +375,8 @@ jobs:
       - name: Checkout workflow toolchain
         uses: actions/checkout@v5
         with:
-          repository: LabVIEW-Community-CI-CD/pr-vi-history
-          ref: v1
+          repository: svelderrainruiz/pr-vi-history-fork
+          ref: ${{ github.workflow_sha }}
           path: .pr-vi-history-tools
           fetch-depth: 1
 
@@ -583,8 +583,8 @@ jobs:
       - name: Checkout workflow toolchain
         uses: actions/checkout@v5
         with:
-          repository: LabVIEW-Community-CI-CD/pr-vi-history
-          ref: v1
+          repository: svelderrainruiz/pr-vi-history-fork
+          ref: ${{ github.workflow_sha }}
           path: .pr-vi-history-tools
           fetch-depth: 1
 
