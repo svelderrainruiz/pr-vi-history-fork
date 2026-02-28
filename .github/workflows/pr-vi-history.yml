@@ -254,7 +254,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: svelderrainruiz/pr-vi-history-fork
-          ref: ${{ github.workflow_sha }}
+          ref: 332b3d9782422e1afd46efb397a187971b77e4ba
           path: .pr-vi-history-tools
           fetch-depth: 1
 
@@ -376,7 +376,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: svelderrainruiz/pr-vi-history-fork
-          ref: ${{ github.workflow_sha }}
+          ref: 332b3d9782422e1afd46efb397a187971b77e4ba
           path: .pr-vi-history-tools
           fetch-depth: 1
 
@@ -584,7 +584,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: svelderrainruiz/pr-vi-history-fork
-          ref: ${{ github.workflow_sha }}
+          ref: 332b3d9782422e1afd46efb397a187971b77e4ba
           path: .pr-vi-history-tools
           fetch-depth: 1
 
