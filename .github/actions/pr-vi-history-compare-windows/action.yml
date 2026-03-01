@@ -66,6 +66,18 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Resolve toolchain root
+      id: paths
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        if ([string]::IsNullOrWhiteSpace($env:GITHUB_ACTION_PATH)) {
+          throw 'GITHUB_ACTION_PATH is empty; cannot resolve toolchain root.'
+        }
+        $toolchainRoot = (Resolve-Path -LiteralPath (Join-Path $env:GITHUB_ACTION_PATH '..\..\..')).Path
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("toolchain_root={0}" -f $toolchainRoot) -Encoding utf8
+
     - name: Validate Windows runner host invariant
       shell: pwsh
       run: |
@@ -82,7 +94,7 @@ runs:
           throw ("Docker daemon must be in Windows container mode. Current OSType={0}" -f $dockerOs)
         }
 
-    - name: Probe image availability
+    - name: Ensure windows image availability
       shell: pwsh
       run: |
         Set-StrictMode -Version Latest
@@ -90,7 +102,11 @@ runs:
         $image = '${{ inputs.windows_image }}'
         docker image inspect $image *> $null
         if ($LASTEXITCODE -ne 0) {
-          throw ("Windows image not present locally: {0}" -f $image)
+          Write-Host ("Windows image not present locally; pulling {0}" -f $image)
+          docker pull $image
+          if ($LASTEXITCODE -ne 0) {
+            throw ("Unable to pull Windows image: {0}" -f $image)
+          }
         }
 
     - name: Validate toolchain contract (cross-compile)
@@ -100,8 +116,14 @@ runs:
       run: |
         Set-StrictMode -Version Latest
         $ErrorActionPreference = 'Stop'
+        $resultsRoot = '${{ inputs.results_root }}'
+        New-Item -ItemType Directory -Path $resultsRoot -Force | Out-Null
+        $toolchainScript = Join-Path '${{ steps.paths.outputs.toolchain_root }}' 'tools' 'Assert-ToolchainContract.ps1'
+        if (-not (Test-Path -LiteralPath $toolchainScript -PathType Leaf)) {
+          throw ("Toolchain contract script not found: {0}" -f $toolchainScript)
+        }
         $contractPath = Join-Path '${{ inputs.results_root }}' 'toolchain-contract.windows.json'
-        pwsh -NoLogo -NoProfile -File tools/Assert-ToolchainContract.ps1 `
+        pwsh -NoLogo -NoProfile -File $toolchainScript `
           -LockPath '${{ inputs.toolchain_lock_path }}' `
           -OutputPath $contractPath `
           -GitHubOutputPath $env:GITHUB_OUTPUT `
@@ -120,14 +142,19 @@ runs:
         $manifestPath = '${{ inputs.manifest_path }}'
         $resultsRoot = '${{ inputs.results_root }}'
         New-Item -ItemType Directory -Path $resultsRoot -Force | Out-Null
+        $resultsRootResolved = (Resolve-Path -LiteralPath $resultsRoot).Path
+        $invokeScriptPath = Join-Path '${{ steps.paths.outputs.toolchain_root }}' 'tools' 'Invoke-PRVIHistory.ps1'
+        if (-not (Test-Path -LiteralPath $invokeScriptPath -PathType Leaf)) {
+          throw ("Invoke-PRVIHistory script not found: {0}" -f $invokeScriptPath)
+        }
         $summaryPath = Join-Path $resultsRoot 'vi-history-summary.json'
 
         $args = @(
           '-NoLogo',
           '-NoProfile',
-          '-File', (Join-Path $env:GITHUB_WORKSPACE 'tools' 'Invoke-PRVIHistory.ps1'),
+          '-File', $invokeScriptPath,
           '-ManifestPath', $manifestPath,
-          '-ResultsRoot', $resultsRoot,
+          '-ResultsRoot', $resultsRootResolved,
           '-SummaryPath', $summaryPath
         )
         $maxPairs = '${{ inputs.max_pairs }}'
@@ -152,7 +179,7 @@ runs:
 
         Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("summary_path={0}" -f $summaryPath) -Encoding utf8
         Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("manifest_path={0}" -f $manifestPath) -Encoding utf8
-        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("results_root={0}" -f $resultsRoot) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("results_root={0}" -f $resultsRootResolved) -Encoding utf8
 
     - name: Summarize history results
       id: summarize
@@ -164,9 +191,14 @@ runs:
         if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) {
           throw ("Summary JSON not found: {0}" -f $summaryPath)
         }
-        $markdownPath = Join-Path '${{ inputs.results_root }}' 'vi-history-summary.md'
-        $jsonPath = Join-Path '${{ inputs.results_root }}' 'vi-history-summary-expanded.json'
-        pwsh -NoLogo -NoProfile -File tools/Summarize-PRVIHistory.ps1 `
+        $resultsRoot = '${{ steps.run.outputs.results_root }}'
+        $summaryScriptPath = Join-Path '${{ steps.paths.outputs.toolchain_root }}' 'tools' 'Summarize-PRVIHistory.ps1'
+        if (-not (Test-Path -LiteralPath $summaryScriptPath -PathType Leaf)) {
+          throw ("Summarize script not found: {0}" -f $summaryScriptPath)
+        }
+        $markdownPath = Join-Path $resultsRoot 'vi-history-summary.md'
+        $jsonPath = Join-Path $resultsRoot 'vi-history-summary-expanded.json'
+        pwsh -NoLogo -NoProfile -File $summaryScriptPath `
           -SummaryPath $summaryPath `
           -MarkdownPath $markdownPath `
           -OutputJsonPath $jsonPath
@@ -177,7 +209,7 @@ runs:
       run: |
         Set-StrictMode -Version Latest
         $ErrorActionPreference = 'Stop'
-        $capture = Get-ChildItem -LiteralPath '${{ inputs.results_root }}' -Recurse -Filter 'ni-windows-container-capture.json' -ErrorAction SilentlyContinue | Select-Object -First 1
+        $capture = Get-ChildItem -LiteralPath '${{ steps.run.outputs.results_root }}' -Recurse -Filter 'ni-windows-container-capture.json' -ErrorAction SilentlyContinue | Select-Object -First 1
         $capturePath = if ($capture) { $capture.FullName } else { '' }
         Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("windows_capture_path={0}" -f $capturePath) -Encoding utf8
 

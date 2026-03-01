@@ -327,7 +327,7 @@ jobs:
         uses: ./.pr-vi-history-tools/.github/actions/pr-vi-history-compare-windows
         with:
           manifest_path: ${{ steps.manifest.outputs.manifest_path }}
-          results_root: ${{ needs.prepare.outputs.results_root }}
+          results_root: ${{ inputs.results_root || 'tests/results/pr-vi-history' }}
           max_pairs: ${{ inputs.max_pairs }}
           compare_modes: ${{ inputs.compare_modes }}
           include_merge_parents: ${{ inputs.include_merge_parents }}
@@ -341,7 +341,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact_name }}
           path: |
-            ${{ needs.prepare.outputs.results_root }}/**
+            ${{ steps.compare.outputs.results_root || inputs.results_root || 'tests/results/pr-vi-history' }}/**
           if-no-files-found: warn
 
       - name: Resolve windows lane status
@@ -394,7 +394,7 @@ jobs:
         uses: ./.pr-vi-history-tools/.github/actions/pr-vi-history-smoke-linux
         with:
           linux_image: ${{ needs.prepare.outputs.linux_image }}
-          results_root: ${{ needs.prepare.outputs.results_root }}
+          results_root: ${{ inputs.results_root || 'tests/results/pr-vi-history' }}
           toolchain_lock_path: ${{ needs.prepare.outputs.toolchain_lock_path }}
           cross_compile: ${{ inputs.cross_compile }}
           emit_html: true
@@ -405,7 +405,7 @@ jobs:
         with:
           name: vi-history-linux-smoke-${{ needs.prepare.outputs.pr_number }}
           path: |
-            ${{ needs.prepare.outputs.results_root }}/**
+            ${{ inputs.results_root || 'tests/results/pr-vi-history' }}/**
           if-no-files-found: warn
 
       - name: Resolve linux lane status
@@ -460,7 +460,7 @@ jobs:
           pair_total_count: ${{ needs.prepare.outputs.pair_total_count }}
           summary_path: ${{ needs.history_windows_container.outputs.summary_path }}
           manifest_path: ${{ needs.history_windows_container.outputs.manifest_path || needs.prepare.outputs.manifest_path }}
-          results_root: ${{ needs.history_windows_container.outputs.results_root || needs.prepare.outputs.results_root }}
+          results_root: ${{ needs.history_windows_container.outputs.results_root || inputs.results_root || 'tests/results/pr-vi-history' }}
           target_count: ${{ needs.history_windows_container.outputs.target_count || '0' }}
           completed_count: ${{ needs.history_windows_container.outputs.completed_count || '0' }}
           diff_count: ${{ needs.history_windows_container.outputs.diff_count || '0' }}
