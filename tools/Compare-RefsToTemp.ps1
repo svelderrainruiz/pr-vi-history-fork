@@ -32,18 +32,21 @@ function Resolve-CompareVIScriptsRoot {
   param([string]$PrimaryRoot)
 
   $candidateRoots = New-Object System.Collections.Generic.List[string]
-  if (-not [string]::IsNullOrWhiteSpace($PrimaryRoot)) {
-    $candidateRoots.Add($PrimaryRoot) | Out-Null
-  }
   $scriptsOverride = [System.Environment]::GetEnvironmentVariable('COMPAREVI_SCRIPTS_ROOT','Process')
   if (-not [string]::IsNullOrWhiteSpace($scriptsOverride)) {
     $candidateRoots.Add($scriptsOverride) | Out-Null
+  }
+  if (-not [string]::IsNullOrWhiteSpace($PrimaryRoot)) {
+    $candidateRoots.Add($PrimaryRoot) | Out-Null
   }
   foreach ($root in $candidateRoots) {
     $moduleCandidate = Join-Path (Join-Path $root 'scripts') 'CompareVI.psm1'
     if (Test-Path -LiteralPath $moduleCandidate -PathType Leaf) {
       return $root
     }
+  }
+  if ($candidateRoots.Count -gt 0) {
+    return $candidateRoots[0]
   }
   return $PrimaryRoot
 }

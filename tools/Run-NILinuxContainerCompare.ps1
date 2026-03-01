@@ -222,6 +222,42 @@ if [[ -z "${cli_path}" ]]; then
   exit 2
 fi
 
+resolve_labview_path() {
+  if [[ -n "${COMPARE_LABVIEW_PATH_ARG:-}" ]] && [[ -x "${COMPARE_LABVIEW_PATH_ARG}" ]]; then
+    printf '%s' "${COMPARE_LABVIEW_PATH_ARG}"
+    return 0
+  fi
+
+  local cli_dir
+  cli_dir="$(dirname "${cli_path}")"
+  local candidates=(
+    "${cli_dir}/labview"
+    "${cli_dir}/LabVIEW"
+    "/usr/local/natinst/LabVIEW-2026-64/labview"
+    "/usr/local/natinst/LabVIEW-2026-64/labviewprofull"
+    "/usr/local/natinst/LabVIEW-2025-64/labview"
+    "/usr/local/natinst/LabVIEW-2025-64/labviewprofull"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s' "${candidate}"
+      return 0
+    fi
+  done
+
+  local discovered
+  discovered="$(find /usr/local/natinst -maxdepth 4 \( -iname 'labview' -o -iname 'LabVIEW' -o -iname 'labviewprofull' -o -iname 'LabVIEWProFull' \) 2>/dev/null | head -n 1 || true)"
+  if [[ -n "${discovered}" ]] && [[ -x "${discovered}" ]]; then
+    printf '%s' "${discovered}"
+    return 0
+  fi
+
+  return 1
+}
+
+labview_path="$(resolve_labview_path || true)"
+
 declare -a args=(
   "-OperationName" "CreateComparisonReport"
   "-VI1" "${COMPARE_BASE_VI}"
@@ -230,8 +266,8 @@ declare -a args=(
   "-ReportType" "${COMPARE_REPORT_TYPE}"
 )
 
-if [[ -n "${COMPARE_LABVIEW_PATH_ARG:-}" ]]; then
-  args+=("-LabVIEWPath" "${COMPARE_LABVIEW_PATH_ARG}")
+if [[ -n "${labview_path}" ]]; then
+  args+=("-LabVIEWPath" "${labview_path}")
 fi
 
 if [[ -n "${COMPARE_FLAGS_B64:-}" ]]; then
@@ -243,6 +279,24 @@ if [[ -n "${COMPARE_FLAGS_B64:-}" ]]; then
       fi
     done <<< "${decoded_flags}"
   fi
+fi
+
+if command -v xvfb-run >/dev/null 2>&1; then
+  xvfb-run -a --server-args="-screen 0 1920x1080x24" "${cli_path}" "${args[@]}"
+  exit $?
+fi
+
+xvfb_pid=""
+if command -v Xvfb >/dev/null 2>&1; then
+  export DISPLAY="${DISPLAY:-:99}"
+  Xvfb "${DISPLAY}" -screen 0 1920x1080x24 >/tmp/xvfb.log 2>&1 &
+  xvfb_pid="$!"
+  trap 'if [[ -n "${xvfb_pid}" ]]; then kill "${xvfb_pid}" >/dev/null 2>&1 || true; fi' EXIT
+fi
+
+if [[ -z "${DISPLAY:-}" ]]; then
+  echo "Unable to open X display. Install xvfb in the image or set DISPLAY." >&2
+  exit 3
 fi
 
 "${cli_path}" "${args[@]}"
@@ -471,7 +525,13 @@ try {
     $scriptTempDir = Join-Path $env:TEMP ("ni-linux-container-script-{0}" -f ([guid]::NewGuid().ToString('N')))
     New-Item -ItemType Directory -Path $scriptTempDir -Force | Out-Null
     $hostContainerScriptPath = Join-Path $scriptTempDir 'run-compare.sh'
-    New-ContainerScript | Set-Content -LiteralPath $hostContainerScriptPath -Encoding utf8
+    $containerScript = New-ContainerScript
+    $containerScript = $containerScript -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText(
+      $hostContainerScriptPath,
+      $containerScript,
+      [System.Text.UTF8Encoding]::new($false)
+    )
     $mounts[$scriptTempDir] = '/compare/script'
 
     $containerName = 'ni-linux-compare-{0}' -f ([guid]::NewGuid().ToString('N').Substring(0, 12))
