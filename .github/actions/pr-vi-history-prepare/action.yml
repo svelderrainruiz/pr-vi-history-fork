@@ -110,6 +110,14 @@ runs:
           return $Default
         }
 
+        function Resolve-ToolchainRepoRoot {
+          $actionPath = $env:GITHUB_ACTION_PATH
+          if ([string]::IsNullOrWhiteSpace($actionPath)) {
+            throw 'GITHUB_ACTION_PATH is empty; cannot resolve toolchain repository root.'
+          }
+          return (Resolve-Path -LiteralPath (Join-Path $actionPath '..\..\..')).Path
+        }
+
         $prNumber = '${{ inputs.pr_number }}'.Trim()
         if ([string]::IsNullOrWhiteSpace($prNumber)) {
           throw 'Input pr_number is required.'
@@ -160,7 +168,12 @@ runs:
 
         git fetch --no-tags --depth=$fetchDepth origin ("pull/{0}/head:pr-{0}-head" -f $prNumber)
         $manifestPath = Join-Path $resultsRoot 'vi-history-manifest.json'
-        pwsh -NoLogo -NoProfile -File (Join-Path $env:GITHUB_WORKSPACE 'tools' 'Get-PRVIDiffManifest.ps1') `
+        $toolchainRepoRoot = Resolve-ToolchainRepoRoot
+        $manifestScriptPath = Join-Path $toolchainRepoRoot 'tools' 'Get-PRVIDiffManifest.ps1'
+        if (-not (Test-Path -LiteralPath $manifestScriptPath -PathType Leaf)) {
+          throw ("Manifest generator script not found: {0}" -f $manifestScriptPath)
+        }
+        pwsh -NoLogo -NoProfile -File $manifestScriptPath `
           -BaseRef $prInfo.baseRefOid `
           -HeadRef $prInfo.headRefOid `
           -OutputPath $manifestPath
