@@ -1,0 +1,180 @@
+name: pr-vi-history-smoke-linux
+description: Run deterministic linux smoke for history/report plumbing.
+inputs:
+  linux_image:
+    description: Linux NI image tag
+    required: true
+  results_root:
+    description: Output root for smoke artifacts
+    required: true
+  toolchain_lock_path:
+    description: Toolchain lock path
+    required: true
+  cross_compile:
+    description: Enforce toolchain contract
+    required: false
+    default: "true"
+  emit_html:
+    description: Emit HTML report
+    required: false
+    default: "true"
+outputs:
+  history_report_md:
+    description: Markdown report path
+    value: ${{ steps.verify.outputs.history_report_md }}
+  history_report_html:
+    description: HTML report path
+    value: ${{ steps.verify.outputs.history_report_html }}
+  smoke_summary_path:
+    description: Smoke summary path
+    value: ${{ steps.verify.outputs.smoke_summary_path }}
+  lane_status:
+    description: Lane status
+    value: ${{ steps.status.outputs.status }}
+  toolchain_contract_path:
+    description: Toolchain contract output path
+    value: ${{ steps.toolchain.outputs.toolchain-contract-path }}
+runs:
+  using: composite
+  steps:
+    - name: Validate Linux host invariant
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${RUNNER_OS:-}" != "Linux" ]]; then
+          echo "Linux smoke requires Linux host runner. RUNNER_OS=${RUNNER_OS:-unknown}" >&2
+          exit 1
+        fi
+        docker_os="$(docker info --format '{{.OSType}}' 2>/dev/null || true)"
+        if [[ -z "${docker_os}" ]]; then
+          echo "Unable to query Docker daemon OSType." >&2
+          exit 1
+        fi
+        if [[ "${docker_os,,}" != "linux" ]]; then
+          echo "Docker daemon must be in Linux container mode. Current OSType=${docker_os}" >&2
+          exit 1
+        fi
+
+    - name: Probe image availability
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker image inspect "${{ inputs.linux_image }}" >/dev/null 2>&1 || {
+          echo "Linux image not present locally: ${{ inputs.linux_image }}" >&2
+          exit 1
+        }
+
+    - name: Validate toolchain contract (cross-compile)
+      id: toolchain
+      if: ${{ inputs.cross_compile == 'true' }}
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $contractPath = Join-Path '${{ inputs.results_root }}' 'toolchain-contract.linux.json'
+        pwsh -NoLogo -NoProfile -File tools/Assert-ToolchainContract.ps1 `
+          -LockPath '${{ inputs.toolchain_lock_path }}' `
+          -OutputPath $contractPath `
+          -GitHubOutputPath $env:GITHUB_OUTPUT `
+          -FailOnMismatch
+
+    - name: Build deterministic smoke fixture
+      id: fixture
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $outputRoot = Join-Path '${{ inputs.results_root }}' 'linux-smoke'
+        pwsh -NoLogo -NoProfile -File tools/New-VIHistorySmokeFixture.ps1 `
+          -OutputRoot $outputRoot `
+          -GitHubOutputPath $env:GITHUB_OUTPUT
+
+    - name: Render VI history report
+      id: render
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $args = @(
+          '-NoLogo',
+          '-NoProfile',
+          '-File', (Join-Path $env:GITHUB_WORKSPACE 'tools' 'Render-VIHistoryReport.ps1'),
+          '-ManifestPath', '${{ steps.fixture.outputs.suite-manifest-path }}',
+          '-HistoryContextPath', '${{ steps.fixture.outputs.history-context-path }}',
+          '-OutputDir', '${{ steps.fixture.outputs.results-dir }}',
+          '-GitHubOutputPath', $env:GITHUB_OUTPUT,
+          '-StepSummaryPath', $env:GITHUB_STEP_SUMMARY
+        )
+        if ([string]::Equals('${{ inputs.emit_html }}', 'true', [System.StringComparison]::OrdinalIgnoreCase)) {
+          $args += '-EmitHtml'
+        }
+        pwsh @args
+
+    - name: Verify smoke contract
+      id: verify
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+
+        $mdPath = '${{ steps.render.outputs.history-report-md }}'
+        if ([string]::IsNullOrWhiteSpace($mdPath) -or -not (Test-Path -LiteralPath $mdPath -PathType Leaf)) {
+          throw ("Missing markdown report output: {0}" -f $mdPath)
+        }
+        $htmlExpected = [string]::Equals('${{ inputs.emit_html }}', 'true', [System.StringComparison]::OrdinalIgnoreCase)
+        $htmlPath = '${{ steps.render.outputs.history-report-html }}'
+        if ($htmlExpected) {
+          if ([string]::IsNullOrWhiteSpace($htmlPath) -or -not (Test-Path -LiteralPath $htmlPath -PathType Leaf)) {
+            throw ("Missing html report output: {0}" -f $htmlPath)
+          }
+        } else {
+          $htmlPath = ''
+        }
+
+        $markdown = Get-Content -LiteralPath $mdPath -Raw
+        if ($markdown -notmatch '\| Metric \| Value \|') {
+          throw 'Markdown output missing metrics table marker.'
+        }
+        if ($markdown -notmatch '\| Mode \| Pair \| Lineage \| Base \| Head \| Diff \| Duration \(s\) \| Categories \| Buckets \| Report \| Highlights \|') {
+          throw 'Markdown output missing pair table marker.'
+        }
+
+        if ($htmlExpected) {
+          $html = Get-Content -LiteralPath $htmlPath -Raw
+          if ($html -notmatch '<th>Lineage</th>') {
+            throw 'HTML output missing lineage header.'
+          }
+          if ($html -notmatch 'data-buckets=') {
+            throw 'HTML output missing bucket marker.'
+          }
+        }
+
+        $resultsDir = '${{ steps.fixture.outputs.results-dir }}'
+        $summaryPath = Join-Path $resultsDir 'history-linux-smoke-summary.json'
+        $summary = [ordered]@{
+          schema = 'vi-history-linux-smoke-summary@v1'
+          generatedAt = (Get-Date).ToUniversalTime().ToString('o')
+          status = 'pass'
+          image = '${{ inputs.linux_image }}'
+          outputs = [ordered]@{
+            historyReportMd = $mdPath
+            historyReportHtml = $htmlPath
+          }
+          hashes = [ordered]@{
+            historyReportMdSha256 = (Get-FileHash -LiteralPath $mdPath -Algorithm SHA256).Hash
+            historyReportHtmlSha256 = if ($htmlPath) { (Get-FileHash -LiteralPath $htmlPath -Algorithm SHA256).Hash } else { $null }
+          }
+        }
+        $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $summaryPath -Encoding utf8
+
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("history_report_md={0}" -f $mdPath) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("history_report_html={0}" -f $htmlPath) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("smoke_summary_path={0}" -f $summaryPath) -Encoding utf8
+
+    - name: Resolve lane status
+      id: status
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'status=success' -Encoding utf8

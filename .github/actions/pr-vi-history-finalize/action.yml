@@ -1,0 +1,180 @@
+name: pr-vi-history-finalize
+description: Normalize outputs, emit summary envelope, and enforce gate policy.
+inputs:
+  pair_count:
+    required: true
+    description: Effective pair count
+  pair_total_count:
+    required: true
+    description: Total pair count
+  summary_path:
+    required: false
+    default: ""
+    description: Windows lane summary path
+  manifest_path:
+    required: true
+    description: Manifest path
+  results_root:
+    required: true
+    description: Results root
+  target_count:
+    required: false
+    default: "0"
+    description: Windows target count
+  completed_count:
+    required: false
+    default: "0"
+    description: Windows completed count
+  diff_count:
+    required: false
+    default: "0"
+    description: Windows diff count
+  markdown_path:
+    required: false
+    default: ""
+    description: Markdown summary path
+  artifact_name:
+    required: true
+    description: Artifact name
+  windows_lane_status:
+    required: true
+    description: Windows lane status
+  linux_lane_status:
+    required: false
+    default: "skipped"
+    description: Linux lane status
+  windows_capture_path:
+    required: false
+    default: ""
+    description: Windows capture path
+  linux_smoke_summary_path:
+    required: false
+    default: ""
+    description: Linux smoke summary path
+  toolchain_contract_path:
+    required: false
+    default: ""
+    description: Toolchain contract path
+  enable_linux_smoke:
+    required: false
+    default: "true"
+    description: Linux lane enabled flag
+outputs:
+  summary_path:
+    description: Summary path output
+    value: ${{ steps.finalize.outputs.summary_path }}
+  results_root:
+    description: Results root output
+    value: ${{ steps.finalize.outputs.results_root }}
+  manifest_path:
+    description: Manifest path output
+    value: ${{ steps.finalize.outputs.manifest_path }}
+  pair_count:
+    description: Pair count
+    value: ${{ steps.finalize.outputs.pair_count }}
+  pair_total_count:
+    description: Pair total count
+    value: ${{ steps.finalize.outputs.pair_total_count }}
+  pair_truncated:
+    description: Pair truncated flag
+    value: ${{ steps.finalize.outputs.pair_truncated }}
+  target_count:
+    description: Target count
+    value: ${{ steps.finalize.outputs.target_count }}
+  completed_count:
+    description: Completed count
+    value: ${{ steps.finalize.outputs.completed_count }}
+  diff_count:
+    description: Diff count
+    value: ${{ steps.finalize.outputs.diff_count }}
+  markdown_path:
+    description: Markdown path
+    value: ${{ steps.finalize.outputs.markdown_path }}
+  artifact_name:
+    description: Artifact name
+    value: ${{ steps.finalize.outputs.artifact_name }}
+  windows_lane_status:
+    description: Windows lane status
+    value: ${{ steps.finalize.outputs.windows_lane_status }}
+  linux_lane_status:
+    description: Linux lane status
+    value: ${{ steps.finalize.outputs.linux_lane_status }}
+  windows_capture_path:
+    description: Windows capture path
+    value: ${{ steps.finalize.outputs.windows_capture_path }}
+  linux_smoke_summary_path:
+    description: Linux smoke summary path
+    value: ${{ steps.finalize.outputs.linux_smoke_summary_path }}
+  toolchain_contract_path:
+    description: Toolchain contract path
+    value: ${{ steps.finalize.outputs.toolchain_contract_path }}
+runs:
+  using: composite
+  steps:
+    - id: finalize
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+
+        $pairCount = 0
+        [void][int]::TryParse('${{ inputs.pair_count }}', [ref]$pairCount)
+        $pairTotalCount = $pairCount
+        [void][int]::TryParse('${{ inputs.pair_total_count }}', [ref]$pairTotalCount)
+        if ($pairTotalCount -lt $pairCount) {
+          $pairTotalCount = $pairCount
+        }
+        $pairTruncated = $pairTotalCount -gt $pairCount
+
+        $windowsStatus = '${{ inputs.windows_lane_status }}'.Trim().ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($windowsStatus)) {
+          $windowsStatus = 'unknown'
+        }
+
+        $linuxStatus = '${{ inputs.linux_lane_status }}'.Trim().ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($linuxStatus)) {
+          $linuxStatus = 'skipped'
+        }
+        $linuxEnabled = [string]::Equals('${{ inputs.enable_linux_smoke }}', 'true', [System.StringComparison]::OrdinalIgnoreCase)
+        if (-not $linuxEnabled) {
+          $linuxStatus = 'skipped'
+        }
+
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("summary_path={0}" -f '${{ inputs.summary_path }}') -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("results_root={0}" -f '${{ inputs.results_root }}') -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("manifest_path={0}" -f '${{ inputs.manifest_path }}') -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("pair_count={0}" -f $pairCount) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("pair_total_count={0}" -f $pairTotalCount) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("pair_truncated={0}" -f $pairTruncated.ToString().ToLowerInvariant()) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("target_count={0}" -f '${{ inputs.target_count }}') -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("completed_count={0}" -f '${{ inputs.completed_count }}') -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("diff_count={0}" -f '${{ inputs.diff_count }}') -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("markdown_path={0}" -f '${{ inputs.markdown_path }}') -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("artifact_name={0}" -f '${{ inputs.artifact_name }}') -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("windows_lane_status={0}" -f $windowsStatus) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("linux_lane_status={0}" -f $linuxStatus) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("windows_capture_path={0}" -f '${{ inputs.windows_capture_path }}') -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("linux_smoke_summary_path={0}" -f '${{ inputs.linux_smoke_summary_path }}') -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("toolchain_contract_path={0}" -f '${{ inputs.toolchain_contract_path }}') -Encoding utf8
+
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '### PR VI history lane summary'
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ''
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Windows lane: **{0}**" -f $windowsStatus)
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Linux lane: **{0}**" -f $linuxStatus)
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Pair count: **{0}** (total changed: **{1}**)" -f $pairCount, $pairTotalCount)
+        if ($pairTruncated) {
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '- Pair list was truncated by `max_targets`.'
+        }
+        if (-not [string]::IsNullOrWhiteSpace('${{ inputs.windows_capture_path }}')) {
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Windows capture: `{0}`" -f '${{ inputs.windows_capture_path }}')
+        }
+        if (-not [string]::IsNullOrWhiteSpace('${{ inputs.linux_smoke_summary_path }}')) {
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Linux smoke summary: `{0}`" -f '${{ inputs.linux_smoke_summary_path }}')
+        }
+        if (-not [string]::IsNullOrWhiteSpace('${{ inputs.toolchain_contract_path }}')) {
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("- Toolchain contract: `{0}`" -f '${{ inputs.toolchain_contract_path }}')
+        }
+
+        if ($windowsStatus -ne 'success') {
+          throw ("Windows lane is hard-gated and must succeed. Current status: {0}" -f $windowsStatus)
+        }

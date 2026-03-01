@@ -1,0 +1,203 @@
+name: pr-vi-history-prepare
+description: Resolve PR metadata, manifest, and toolchain contract defaults.
+inputs:
+  pr_number:
+    description: Pull request number
+    required: true
+  fetch_depth:
+    description: Git fetch depth for pull/<pr>/head
+    required: false
+    default: "20"
+  max_targets:
+    description: Max changed VI targets to include (0 = all)
+    required: false
+    default: "60"
+  results_root:
+    description: Results root path (absolute or repository-relative)
+    required: false
+    default: tests/results/pr-vi-history
+  toolchain_lock_path:
+    description: Toolchain lock JSON path
+    required: false
+    default: toolchain-lock.json
+  windows_image:
+    description: Requested windows image tag
+    required: false
+    default: nationalinstruments/labview:2026q1-windows
+  linux_image:
+    description: Requested linux image tag
+    required: false
+    default: nationalinstruments/labview:latest-linux
+outputs:
+  pr_number:
+    description: Pull request number
+    value: ${{ steps.prepare.outputs.pr_number }}
+  pr_url:
+    description: Pull request URL
+    value: ${{ steps.prepare.outputs.pr_url }}
+  base_sha:
+    description: Base commit SHA
+    value: ${{ steps.prepare.outputs.base_sha }}
+  head_sha:
+    description: Head commit SHA
+    value: ${{ steps.prepare.outputs.head_sha }}
+  manifest_path:
+    description: Manifest path
+    value: ${{ steps.prepare.outputs.manifest_path }}
+  pair_count:
+    description: Effective pair count
+    value: ${{ steps.prepare.outputs.pair_count }}
+  pair_total_count:
+    description: Total pair count before truncation
+    value: ${{ steps.prepare.outputs.pair_total_count }}
+  results_root:
+    description: Resolved results root
+    value: ${{ steps.prepare.outputs.results_root }}
+  artifact_name:
+    description: Main artifact name
+    value: ${{ steps.prepare.outputs.artifact_name }}
+  manifest_artifact_name:
+    description: Manifest artifact name
+    value: ${{ steps.prepare.outputs.manifest_artifact_name }}
+  toolchain_lock_path:
+    description: Resolved toolchain lock path
+    value: ${{ steps.prepare.outputs.toolchain_lock_path }}
+  node_version:
+    description: Pinned node version
+    value: ${{ steps.prepare.outputs.node_version }}
+  windows_image:
+    description: Effective windows image tag
+    value: ${{ steps.prepare.outputs.windows_image }}
+  linux_image:
+    description: Effective linux image tag
+    value: ${{ steps.prepare.outputs.linux_image }}
+  windows_image_digest:
+    description: Locked windows image config digest
+    value: ${{ steps.prepare.outputs.windows_image_digest }}
+  linux_image_digest:
+    description: Locked linux image config digest
+    value: ${{ steps.prepare.outputs.linux_image_digest }}
+runs:
+  using: composite
+  steps:
+    - name: Prepare metadata and manifest
+      id: prepare
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+
+        function Resolve-FullPath {
+          param([Parameter(Mandatory = $true)][string]$PathValue)
+          if ([System.IO.Path]::IsPathRooted($PathValue)) {
+            return [System.IO.Path]::GetFullPath($PathValue)
+          }
+          return [System.IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE $PathValue))
+        }
+
+        function Resolve-PositiveIntOrDefault {
+          param(
+            [string]$Value,
+            [int]$Default
+          )
+          if ([string]::IsNullOrWhiteSpace($Value)) {
+            return $Default
+          }
+          $parsed = 0
+          if ([int]::TryParse($Value, [ref]$parsed) -and $parsed -gt 0) {
+            return $parsed
+          }
+          return $Default
+        }
+
+        $prNumber = '${{ inputs.pr_number }}'.Trim()
+        if ([string]::IsNullOrWhiteSpace($prNumber)) {
+          throw 'Input pr_number is required.'
+        }
+
+        $fetchDepth = Resolve-PositiveIntOrDefault -Value '${{ inputs.fetch_depth }}' -Default 20
+        $maxTargetsRaw = '${{ inputs.max_targets }}'
+        $maxTargets = 0
+        if (-not [string]::IsNullOrWhiteSpace($maxTargetsRaw)) {
+          $parsedMaxTargets = 0
+          if (-not [int]::TryParse($maxTargetsRaw, [ref]$parsedMaxTargets) -or $parsedMaxTargets -lt 0) {
+            throw ("Invalid max_targets value '{0}'. Expected non-negative integer." -f $maxTargetsRaw)
+          }
+          $maxTargets = $parsedMaxTargets
+        }
+
+        $resultsRoot = Resolve-FullPath -PathValue '${{ inputs.results_root }}'
+        New-Item -ItemType Directory -Path $resultsRoot -Force | Out-Null
+
+        $lockPath = Resolve-FullPath -PathValue '${{ inputs.toolchain_lock_path }}'
+        if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+          throw ("Toolchain lock file not found: {0}" -f $lockPath)
+        }
+        $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json -Depth 12
+        if ($lock.schema -ne 'pr-vi-history-toolchain-lock@v1') {
+          throw ("Unexpected toolchain lock schema '{0}'." -f $lock.schema)
+        }
+
+        $windowsImage = '${{ inputs.windows_image }}'
+        if ([string]::IsNullOrWhiteSpace($windowsImage)) {
+          $windowsImage = [string]$lock.images.windows.sourceTag
+        }
+        $linuxImage = '${{ inputs.linux_image }}'
+        if ([string]::IsNullOrWhiteSpace($linuxImage)) {
+          $linuxImage = [string]$lock.images.linux.sourceTag
+        }
+
+        $repoSlug = $env:GITHUB_REPOSITORY
+        if ([string]::IsNullOrWhiteSpace($repoSlug)) {
+          throw 'GITHUB_REPOSITORY is empty.'
+        }
+
+        $prJson = gh pr view $prNumber --repo $repoSlug --json number,url,baseRefOid,headRefOid
+        $prInfo = $prJson | ConvertFrom-Json
+        if (-not $prInfo) {
+          throw ("Unable to resolve PR metadata for #{0}." -f $prNumber)
+        }
+
+        git fetch --no-tags --depth=$fetchDepth origin ("pull/{0}/head:pr-{0}-head" -f $prNumber)
+        $manifestPath = Join-Path $resultsRoot 'vi-history-manifest.json'
+        pwsh -NoLogo -NoProfile -File (Join-Path $env:GITHUB_WORKSPACE 'tools' 'Get-PRVIDiffManifest.ps1') `
+          -BaseRef $prInfo.baseRefOid `
+          -HeadRef $prInfo.headRefOid `
+          -OutputPath $manifestPath
+
+        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+          throw ("Manifest generation failed: {0}" -f $manifestPath)
+        }
+
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -Depth 8
+        $pairs = @($manifest.pairs)
+        $pairTotalCount = $pairs.Count
+        if ($maxTargets -gt 0 -and $pairs.Count -gt $maxTargets) {
+          $manifest.pairs = @($pairs | Select-Object -First $maxTargets)
+          $manifest.totalPairs = $pairTotalCount
+          $manifest.maxTargets = $maxTargets
+          $manifest.truncated = $true
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+          $pairs = @($manifest.pairs)
+        }
+        $pairCount = $pairs.Count
+
+        $artifactName = "pr-vi-history-$prNumber"
+        $manifestArtifactName = "pr-vi-history-prepare-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("pr_number={0}" -f $prInfo.number) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("pr_url={0}" -f $prInfo.url) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("base_sha={0}" -f $prInfo.baseRefOid) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("head_sha={0}" -f $prInfo.headRefOid) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("manifest_path={0}" -f $manifestPath) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("pair_count={0}" -f $pairCount) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("pair_total_count={0}" -f $pairTotalCount) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("results_root={0}" -f $resultsRoot) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("artifact_name={0}" -f $artifactName) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("manifest_artifact_name={0}" -f $manifestArtifactName) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("toolchain_lock_path={0}" -f $lockPath) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("node_version={0}" -f [string]$lock.node.version) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("windows_image={0}" -f $windowsImage) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("linux_image={0}" -f $linuxImage) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("windows_image_digest={0}" -f [string]$lock.images.windows.sourceConfigDigest) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("linux_image_digest={0}" -f [string]$lock.images.linux.sourceConfigDigest) -Encoding utf8

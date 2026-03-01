@@ -1,0 +1,190 @@
+name: pr-vi-history-compare-windows
+description: Run PR VI history compare using NI windows container backend.
+inputs:
+  manifest_path:
+    description: Path to vi-diff manifest
+    required: true
+  results_root:
+    description: Output root for history artifacts
+    required: true
+  max_pairs:
+    description: Max commit pairs per target
+    required: false
+    default: "6"
+  compare_modes:
+    description: Optional compare mode list (comma/semicolon/newline)
+    required: false
+    default: ""
+  include_merge_parents:
+    description: Include merge-parent lineage
+    required: false
+    default: "false"
+  windows_image:
+    description: Windows NI container image
+    required: true
+  cross_compile:
+    description: Enforce toolchain contract
+    required: false
+    default: "true"
+  toolchain_lock_path:
+    description: Toolchain lock path
+    required: true
+outputs:
+  summary_path:
+    description: Summary JSON path
+    value: ${{ steps.run.outputs.summary_path }}
+  manifest_path:
+    description: Manifest path
+    value: ${{ steps.run.outputs.manifest_path }}
+  results_root:
+    description: Results root path
+    value: ${{ steps.run.outputs.results_root }}
+  target_count:
+    description: Target count
+    value: ${{ steps.summarize.outputs.target_count }}
+  completed_count:
+    description: Completed count
+    value: ${{ steps.summarize.outputs.completed_count }}
+  diff_count:
+    description: Diff count
+    value: ${{ steps.summarize.outputs.diff_count }}
+  markdown_path:
+    description: Markdown output path
+    value: ${{ steps.summarize.outputs.markdown_path }}
+  markdown:
+    description: Encoded markdown
+    value: ${{ steps.summarize.outputs.markdown }}
+  lane_status:
+    description: Lane status
+    value: ${{ steps.lane.outputs.status }}
+  windows_capture_path:
+    description: NI windows capture JSON path
+    value: ${{ steps.capture.outputs.windows_capture_path }}
+  toolchain_contract_path:
+    description: Toolchain contract output path
+    value: ${{ steps.toolchain.outputs.toolchain-contract-path }}
+runs:
+  using: composite
+  steps:
+    - name: Validate Windows runner host invariant
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        if (-not [string]::Equals($env:RUNNER_OS, 'Windows', [System.StringComparison]::OrdinalIgnoreCase)) {
+          throw ("Windows container compare requires Windows host runner. RUNNER_OS={0}" -f $env:RUNNER_OS)
+        }
+        $dockerOs = (& docker info --format '{{.OSType}}' 2>$null).Trim().ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($dockerOs)) {
+          throw 'Unable to query Docker daemon OSType.'
+        }
+        if ($dockerOs -ne 'windows') {
+          throw ("Docker daemon must be in Windows container mode. Current OSType={0}" -f $dockerOs)
+        }
+
+    - name: Probe image availability
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $image = '${{ inputs.windows_image }}'
+        docker image inspect $image *> $null
+        if ($LASTEXITCODE -ne 0) {
+          throw ("Windows image not present locally: {0}" -f $image)
+        }
+
+    - name: Validate toolchain contract (cross-compile)
+      id: toolchain
+      if: ${{ inputs.cross_compile == 'true' }}
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $contractPath = Join-Path '${{ inputs.results_root }}' 'toolchain-contract.windows.json'
+        pwsh -NoLogo -NoProfile -File tools/Assert-ToolchainContract.ps1 `
+          -LockPath '${{ inputs.toolchain_lock_path }}' `
+          -OutputPath $contractPath `
+          -GitHubOutputPath $env:GITHUB_OUTPUT `
+          -FailOnMismatch
+
+    - name: Run PR VI history compare
+      id: run
+      shell: pwsh
+      env:
+        PR_VI_HISTORY_COMPARE_BACKEND: ni-windows-container
+        PR_VI_HISTORY_WINDOWS_IMAGE: ${{ inputs.windows_image }}
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+
+        $manifestPath = '${{ inputs.manifest_path }}'
+        $resultsRoot = '${{ inputs.results_root }}'
+        New-Item -ItemType Directory -Path $resultsRoot -Force | Out-Null
+        $summaryPath = Join-Path $resultsRoot 'vi-history-summary.json'
+
+        $args = @(
+          '-NoLogo',
+          '-NoProfile',
+          '-File', (Join-Path $env:GITHUB_WORKSPACE 'tools' 'Invoke-PRVIHistory.ps1'),
+          '-ManifestPath', $manifestPath,
+          '-ResultsRoot', $resultsRoot,
+          '-SummaryPath', $summaryPath
+        )
+        $maxPairs = '${{ inputs.max_pairs }}'
+        if (-not [string]::IsNullOrWhiteSpace($maxPairs)) {
+          $args += '-MaxPairs'
+          $args += $maxPairs
+        }
+        $modeTokens = @()
+        $rawModes = '${{ inputs.compare_modes }}'
+        if (-not [string]::IsNullOrWhiteSpace($rawModes)) {
+          $modeTokens = $rawModes -split '[,\r\n;]+' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        }
+        if ($modeTokens.Count -gt 0) {
+          $args += '-Mode'
+          $args += $modeTokens
+        }
+        if ([string]::Equals('${{ inputs.include_merge_parents }}', 'true', [System.StringComparison]::OrdinalIgnoreCase)) {
+          $args += '-IncludeMergeParents'
+        }
+
+        pwsh @args
+
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("summary_path={0}" -f $summaryPath) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("manifest_path={0}" -f $manifestPath) -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("results_root={0}" -f $resultsRoot) -Encoding utf8
+
+    - name: Summarize history results
+      id: summarize
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $summaryPath = '${{ steps.run.outputs.summary_path }}'
+        if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) {
+          throw ("Summary JSON not found: {0}" -f $summaryPath)
+        }
+        $markdownPath = Join-Path '${{ inputs.results_root }}' 'vi-history-summary.md'
+        $jsonPath = Join-Path '${{ inputs.results_root }}' 'vi-history-summary-expanded.json'
+        pwsh -NoLogo -NoProfile -File tools/Summarize-PRVIHistory.ps1 `
+          -SummaryPath $summaryPath `
+          -MarkdownPath $markdownPath `
+          -OutputJsonPath $jsonPath
+
+    - name: Resolve windows capture path
+      id: capture
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $capture = Get-ChildItem -LiteralPath '${{ inputs.results_root }}' -Recurse -Filter 'ni-windows-container-capture.json' -ErrorAction SilentlyContinue | Select-Object -First 1
+        $capturePath = if ($capture) { $capture.FullName } else { '' }
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("windows_capture_path={0}" -f $capturePath) -Encoding utf8
+
+    - name: Resolve lane status
+      id: lane
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'status=success' -Encoding utf8
