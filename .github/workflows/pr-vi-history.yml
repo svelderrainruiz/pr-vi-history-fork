@@ -185,7 +185,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 concurrency:
   group: pr-vi-history-${{ github.repository }}-${{ inputs.pr_number }}
