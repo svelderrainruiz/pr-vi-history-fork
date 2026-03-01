@@ -132,7 +132,7 @@ function Resolve-ReportTypeInfo {
     'html' {
       return [pscustomobject]@{
         InputType     = 'html'
-        CliReportType = 'HTMLSingleFile'
+        CliReportType = 'HTML'
         Extension     = 'html'
       }
     }
@@ -411,6 +411,7 @@ $capture = [ordered]@{
   baseVi        = $null
   headVi        = $null
   reportPath    = $null
+  reportAssets  = @()
   command       = $null
   stdoutPath    = $null
   stderrPath    = $null
@@ -538,6 +539,18 @@ try {
         }
       }
       $finalExitCode = $exitCode
+    }
+
+    if (Test-Path -LiteralPath $resolvedReportPath -PathType Leaf) {
+      $assetFiles = @()
+      foreach ($pattern in @('*.png','*.jpg','*.jpeg','*.gif','*.webp','*.svg')) {
+        $assetFiles += Get-ChildItem -LiteralPath $reportDirectory -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue
+      }
+      if ($assetFiles.Count -gt 0) {
+        $capture.reportAssets = @($assetFiles | Sort-Object FullName | ForEach-Object { $_.FullName })
+      } else {
+        $capture.reportAssets = @()
+      }
     }
   }
 } catch {
