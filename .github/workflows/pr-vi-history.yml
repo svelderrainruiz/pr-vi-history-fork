@@ -133,6 +133,16 @@ on:
         required: false
         default: true
         type: boolean
+      tools_repository:
+        description: Repository providing internal PR VI history composite actions
+        required: false
+        default: svelderrainruiz/pr-vi-history-fork
+        type: string
+      tools_ref:
+        description: Ref (tag/branch/SHA) for toolchain checkout repository
+        required: false
+        default: main
+        type: string
     outputs:
       summary_path:
         description: Absolute path to pr-vi-history-summary@v1 json
@@ -213,8 +223,6 @@ jobs:
       toolchain_lock_path: ${{ steps.prepare.outputs.toolchain_lock_path }}
       windows_image_digest: ${{ steps.prepare.outputs.windows_image_digest }}
       linux_image_digest: ${{ steps.prepare.outputs.linux_image_digest }}
-      tools_repository: ${{ steps.source.outputs.tools_repository }}
-      tools_ref: ${{ steps.source.outputs.tools_ref }}
     steps:
       - name: Validate windows runner policy input
         shell: bash
@@ -225,22 +233,6 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve workflow source repository
-        id: source
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $workflowRef = $env:GITHUB_WORKFLOW_REF
-          if ([string]::IsNullOrWhiteSpace($workflowRef)) {
-            throw 'GITHUB_WORKFLOW_REF is empty; cannot resolve workflow source repository.'
-          }
-          if ($workflowRef -notmatch '^(?<repo>[^@]+?)/\.github/workflows/[^@]+@(?<ref>.+)$') {
-            throw ("Unable to parse workflow source from GITHUB_WORKFLOW_REF: {0}" -f $workflowRef)
-          }
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("tools_repository={0}" -f $Matches.repo) -Encoding utf8
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ("tools_ref={0}" -f $Matches.ref) -Encoding utf8
-
       - name: Checkout caller repository
         uses: actions/checkout@v5
         with:
@@ -249,8 +241,8 @@ jobs:
       - name: Checkout workflow toolchain
         uses: actions/checkout@v5
         with:
-          repository: ${{ steps.source.outputs.tools_repository }}
-          ref: ${{ steps.source.outputs.tools_ref }}
+          repository: ${{ inputs.tools_repository || 'svelderrainruiz/pr-vi-history-fork' }}
+          ref: ${{ inputs.tools_ref || 'main' }}
           path: .pr-vi-history-tools
           fetch-depth: 1
 
@@ -301,8 +293,8 @@ jobs:
       - name: Checkout workflow toolchain
         uses: actions/checkout@v5
         with:
-          repository: ${{ needs.prepare.outputs.tools_repository }}
-          ref: ${{ needs.prepare.outputs.tools_ref }}
+          repository: ${{ inputs.tools_repository || 'svelderrainruiz/pr-vi-history-fork' }}
+          ref: ${{ inputs.tools_ref || 'main' }}
           path: .pr-vi-history-tools
           fetch-depth: 1
 
@@ -386,8 +378,8 @@ jobs:
       - name: Checkout workflow toolchain
         uses: actions/checkout@v5
         with:
-          repository: ${{ needs.prepare.outputs.tools_repository }}
-          ref: ${{ needs.prepare.outputs.tools_ref }}
+          repository: ${{ inputs.tools_repository || 'svelderrainruiz/pr-vi-history-fork' }}
+          ref: ${{ inputs.tools_ref || 'main' }}
           path: .pr-vi-history-tools
           fetch-depth: 1
 
@@ -455,8 +447,8 @@ jobs:
       - name: Checkout workflow toolchain
         uses: actions/checkout@v5
         with:
-          repository: ${{ needs.prepare.outputs.tools_repository }}
-          ref: ${{ needs.prepare.outputs.tools_ref }}
+          repository: ${{ inputs.tools_repository || 'svelderrainruiz/pr-vi-history-fork' }}
+          ref: ${{ inputs.tools_ref || 'main' }}
           path: .pr-vi-history-tools
           fetch-depth: 1
 
