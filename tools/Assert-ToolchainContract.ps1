@@ -29,7 +29,14 @@ function Resolve-ExistingPath {
   )
 
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-    throw ("{0} not found: {1}" -f $Description, $Path)
+    $hint = $null
+    if ($Description -eq 'Toolchain lock file' -and $Path -match '\.pr-vi-history-tools[\\/]+toolchain-lock\.json$') {
+      $hint = 'The reusable workflow tools_ref may target an older commit without toolchain-lock.json. Re-pin tools_ref/uses to a newer workflow SHA.'
+    }
+    if ([string]::IsNullOrWhiteSpace($hint)) {
+      throw ("{0} not found: {1}" -f $Description, $Path)
+    }
+    throw ("{0} not found: {1}`n{2}" -f $Description, $Path, $hint)
   }
   return (Resolve-Path -LiteralPath $Path).Path
 }
