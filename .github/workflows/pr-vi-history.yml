@@ -210,6 +210,8 @@ jobs:
       pr_url: ${{ steps.pr.outputs.pr_url }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
+      tools_repository: ${{ steps.source.outputs.tools_repository }}
+      tools_ref: ${{ steps.source.outputs.tools_ref }}
       pair_count: ${{ steps.manifest.outputs.pair_count }}
       pair_total_count: ${{ steps.manifest.outputs.pair_total_count }}
       manifest_artifact_name: ${{ steps.meta.outputs.manifest_artifact_name }}
@@ -245,16 +247,60 @@ jobs:
           "base_sha=$($info.baseRefOid)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "head_sha=$($info.headRefOid)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Resolve workflow source repository
+        id: source
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+
+          $workflowRef = $env:GITHUB_WORKFLOW_REF
+          if ([string]::IsNullOrWhiteSpace($workflowRef)) {
+            throw 'GITHUB_WORKFLOW_REF is empty; cannot resolve workflow source repository.'
+          }
+
+          # Example: owner/repo/.github/workflows/file.yml@refs/heads/main
+          if ($workflowRef -notmatch '^(?<repo>[^@]+?)/\.github/workflows/[^@]+@(?<ref>.+)$') {
+            throw ("Unable to parse workflow source from GITHUB_WORKFLOW_REF: {0}" -f $workflowRef)
+          }
+
+          $toolsRepository = $Matches.repo
+          $toolsRef = $Matches.ref
+          if ([string]::IsNullOrWhiteSpace($toolsRepository)) {
+            throw ("Resolved tools repository is empty from workflow ref: {0}" -f $workflowRef)
+          }
+          if ([string]::IsNullOrWhiteSpace($toolsRef)) {
+            throw ("Resolved tools ref is empty from workflow ref: {0}" -f $workflowRef)
+          }
+
+          "tools_repository=$toolsRepository" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "tools_ref=$toolsRef" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Checkout caller repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
+      - name: Validate workflow source outputs
+        shell: pwsh
+        env:
+          TOOLS_REPOSITORY: ${{ steps.source.outputs.tools_repository }}
+          TOOLS_REF: ${{ steps.source.outputs.tools_ref }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:TOOLS_REPOSITORY)) {
+            throw 'Workflow source repository output is empty; refusing to checkout toolchain.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TOOLS_REF)) {
+            throw 'Workflow source ref output is empty; refusing to checkout toolchain.'
+          }
+
       - name: Checkout workflow toolchain
         uses: actions/checkout@v5
         with:
-          repository: svelderrainruiz/pr-vi-history-fork
-          ref: 332b3d9782422e1afd46efb397a187971b77e4ba
+          repository: ${{ steps.source.outputs.tools_repository }}
+          ref: ${{ steps.source.outputs.tools_ref }}
           path: .pr-vi-history-tools
           fetch-depth: 1
 
@@ -372,11 +418,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate workflow source outputs
+        shell: pwsh
+        env:
+          TOOLS_REPOSITORY: ${{ needs.prepare.outputs.tools_repository }}
+          TOOLS_REF: ${{ needs.prepare.outputs.tools_ref }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:TOOLS_REPOSITORY)) {
+            throw 'Prepare output tools_repository is empty; cannot checkout workflow toolchain.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TOOLS_REF)) {
+            throw 'Prepare output tools_ref is empty; cannot checkout workflow toolchain.'
+          }
+
       - name: Checkout workflow toolchain
         uses: actions/checkout@v5
         with:
-          repository: svelderrainruiz/pr-vi-history-fork
-          ref: 332b3d9782422e1afd46efb397a187971b77e4ba
+          repository: ${{ needs.prepare.outputs.tools_repository }}
+          ref: ${{ needs.prepare.outputs.tools_ref }}
           path: .pr-vi-history-tools
           fetch-depth: 1
 
@@ -580,11 +641,26 @@ jobs:
       artifact_name: ${{ steps.meta.outputs.artifact_name || '' }}
       lane_status: ${{ steps.lane.outputs.status || 'unknown' }}
     steps:
+      - name: Validate workflow source outputs
+        shell: pwsh
+        env:
+          TOOLS_REPOSITORY: ${{ needs.prepare.outputs.tools_repository }}
+          TOOLS_REF: ${{ needs.prepare.outputs.tools_ref }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:TOOLS_REPOSITORY)) {
+            throw 'Prepare output tools_repository is empty; cannot checkout workflow toolchain.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TOOLS_REF)) {
+            throw 'Prepare output tools_ref is empty; cannot checkout workflow toolchain.'
+          }
+
       - name: Checkout workflow toolchain
         uses: actions/checkout@v5
         with:
-          repository: svelderrainruiz/pr-vi-history-fork
-          ref: 332b3d9782422e1afd46efb397a187971b77e4ba
+          repository: ${{ needs.prepare.outputs.tools_repository }}
+          ref: ${{ needs.prepare.outputs.tools_ref }}
           path: .pr-vi-history-tools
           fetch-depth: 1
 
