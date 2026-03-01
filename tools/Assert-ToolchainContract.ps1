@@ -129,10 +129,11 @@ if ($nodeMajor -ne $null -and $nodeMajor -eq $expectedNodeMajor) {
 if (-not $majorMatch) {
   $status = 'fail'
 }
+$nodeMajorDisplay = if ($nodeMajor -ne $null) { [string]$nodeMajor } else { 'unknown' }
 [void]$checks.Add([ordered]@{
   name = 'node-major-match'
   passed = $majorMatch
-  detail = ("expected major {0}, actual {1}" -f $expectedNodeMajor, (if ($nodeMajor -ne $null) { $nodeMajor } else { 'unknown' }))
+  detail = ("expected major {0}, actual {1}" -f $expectedNodeMajor, $nodeMajorDisplay)
 })
 
 $exactMatch = $false
@@ -142,10 +143,11 @@ if (-not [string]::IsNullOrWhiteSpace($nodeVersion) -and $nodeVersion -eq $expec
 if (-not $exactMatch) {
   $status = 'fail'
 }
+$nodeVersionDisplay = if ($nodeVersion) { $nodeVersion } else { 'unknown' }
 [void]$checks.Add([ordered]@{
   name = 'node-exact-match'
   passed = $exactMatch
-  detail = ("expected {0}, actual {1}" -f $expectedNodeVersion, (if ($nodeVersion) { $nodeVersion } else { 'unknown' }))
+  detail = ("expected {0}, actual {1}" -f $expectedNodeVersion, $nodeVersionDisplay)
 })
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
